@@ -9,7 +9,7 @@ ml lang JuliaHPC
 
 respath="results"
 rm -rf $respath
-threads=(1 4 8)
+threads=(1 2 4 8 16 32 64)
 for t in ${threads[@]}; do
     julia --project=.. -t $t bbvv.jl $respath
 done
