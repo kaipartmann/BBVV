@@ -82,6 +82,7 @@ function simulation(pc::PointCloud, mat::BondBasedMaterial, bcs::Vector{Velocity
     println("----------------------------")
     println("  PERIDYNAMICS SIMULATION")
     println("----------------------------")
+    reset_timer!(TO)
     walltime = @elapsed begin
         print("initialization...")
         sp, gs, vtls = init_simulation(pc, mat, bcs, precracks, n_timesteps, export_freq,
@@ -92,15 +93,16 @@ function simulation(pc::PointCloud, mat::BondBasedMaterial, bcs::Vector{Velocity
         println("\r✔ time loop   ")
     end
     open(joinpath(export_path,"logfile.log"), "w+") do io
-        write(io, "simulation completed after $walltime seconds (wall time)")
+        write(io, "simulation completed after $walltime seconds (wall time)\n\n")
+        show(IOContext(io, :displaysize => (24,150)), TO)
     end
     println("--- SIMULATION COMPLETED ---")
 end
 
 
-function init_simulation(pc::PointCloud, mat::BondBasedMaterial, bcs::Vector{VelocityBC},
-                         precracks::Vector{PreCrack}, n_timesteps::Int, export_freq::Int,
-                         export_path::String)
+@timeit TO function init_simulation(pc::PointCloud, mat::BondBasedMaterial,
+                                    bcs::Vector{VelocityBC}, precracks::Vector{PreCrack},
+                                    n_timesteps::Int, export_freq::Int, export_path::String)
     n_threads = nthreads()
 
     # create SimulationParameters
@@ -116,14 +118,6 @@ function init_simulation(pc::PointCloud, mat::BondBasedMaterial, bcs::Vector{Vel
     # create Vector{ThreadLocalStorage}
     vtls = Vector{ThreadLocalStorage}(undef, n_threads)
     @threads for tid in 1:n_threads
-        # all_points_of_tid = Set{Int}()
-        # for i in tl_points
-        #     push!(all_points_of_tid, i)
-        #     for nid in sp.hood_range[i]
-        #         j = sp.bonds[nid]
-        #         push!(all_points_of_tid, j)
-        #     end
-        # end
         tl_points = point_dist[tid]
         pointmap = Dict{Int,Int}()
         n_local_points = 0
@@ -135,12 +129,11 @@ function init_simulation(pc::PointCloud, mat::BondBasedMaterial, bcs::Vector{Vel
             pointmap[i] = n_local_points
         end
         @assert length(pointmap) == n_local_points
-
         b_int_local = zeros(3, n_local_points)
         n_active_family_members_local = zeros(n_local_points)
         for (gi, li) in pointmap
             if li > n_local_points
-                error("local_index > n_local_points!\n")# tid val n_local_points
+                error("local_index > n_local_points!\n")
             end
             n_active_family_members_local[li] = n_family_members[gi]
         end
@@ -166,102 +159,26 @@ function init_simulation(pc::PointCloud, mat::BondBasedMaterial, bcs::Vector{Vel
     return sp, gs, vtls
 end
 
-function time_loop!(gs::GlobalStorage, vtls::Vector{ThreadLocalStorage},
-                    sp::SimulationParameters)
-
+@timeit TO function time_loop!(gs::GlobalStorage, vtls::Vector{ThreadLocalStorage},
+                               sp::SimulationParameters)
     Δt = calc_stable_timestep(sp, vtls)
     Δt½ = 0.5Δt
     export_vtk(sp, gs, 0, 0.0)
 
     for t in 1:sp.n_timesteps
         time = t * Δt
-
-        # update velocity_half
-        @threads :static for i in 1:sp.pc.n_points
-            for d in 1:3
-                gs.velocity_half[d, i] = gs.velocity[d, i] + gs.acceleration[d, i] * Δt½
-            end
-        end
-
-        # apply_bcs
-        @sync for bc in sp.bcs
-            Threads.@spawn begin
-                value = bc.fun(t)
-                dim = bc.dim
-                @inbounds @simd for i in bc.point_id_set
-                    gs.velocity_half[dim, i] = value
-                end
-            end
-        end
-
-        # update_disp_and_position
-        @threads :static for i in 1:sp.pc.n_points
-            for d in 1:3
-                gs.displacement[d, i] += gs.velocity_half[d, i] * Δt
-                gs.position[d, i] += gs.velocity_half[d, i] * Δt
-            end
-        end
-
-        # compute_forcedensity
-
-        @threads :static for tls in vtls
-            tls.b_int .= 0
-            tls.n_active_family_members .= 0
-            for i in tls.tl_points
-                for cbond in sp.hood_range[i]
-                    j = sp.bonds[cbond]
-                    L = sp.init_dists[cbond]
-                    li = tls.pointmap[i]
-                    ϑx = gs.position[1, j] - gs.position[1, i]
-                    ϑy = gs.position[2, j] - gs.position[2, i]
-                    ϑz = gs.position[3, j] - gs.position[3, i]
-                    l = sqrt(ϑx * ϑx + ϑy * ϑy + ϑz * ϑz)
-                    ε = (l - L) / L
-                    temp = gs.bond_failure[cbond] * sp.mat.bc * ε / l * sp.pc.volume[j]
-                    tls.b_int[1, li] += temp * ϑx
-                    tls.b_int[2, li] += temp * ϑy
-                    tls.b_int[3, li] += temp * ϑz
-
-                    # failure mechanism
-                    if ε > sp.mat.εc
-                        gs.bond_failure[cbond] = 0
-                    end
-                    tls.n_active_family_members[li] += gs.bond_failure[cbond]
-                end
-            end
-        end
-
-        # reduction
-        gs.b_int .= 0
-        gs.n_active_family_members .= 0
-        for tls in vtls
-            for (gi, li) in tls.pointmap
-                for d in 1:3
-                    gs.b_int[d, gi] = tls.b_int[d, li]
-                end
-                gs.n_active_family_members[gi] = tls.n_active_family_members[li]
-            end
-        end
-
-        # calc_damage
-        @threads :static for i in 1:sp.pc.n_points
-            gs.damage[i] = 1 - gs.n_active_family_members[i] / sp.n_family_members[i]
-        end
-
-        # compute equation of motion
-        @threads :static for i in 1:sp.pc.n_points
-            for d in 1:3
-                gs.acceleration[d, i] = (gs.b_int[d, i]) / sp.mat.rho
-                gs.velocity[d, i] = gs.velocity_half[d, i] + gs.acceleration[d, i] * Δt½
-            end
-        end
-
-        # export results
+        update_velocity_half!(gs, sp, Δt½)
+        apply_bcs!(gs, sp, time)
+        update_disp_and_position!(gs, sp, Δt)
+        compute_forcedensity!(vtls, gs, sp)
+        reduce_tls_to_gs!(gs, vtls)
+        calc_damage!(gs, sp)
+        compute_equation_of_motion!(gs, sp, Δt½)
         if mod(t, sp.export_freq) == 0
             export_vtk(sp, gs, t, time)
         end
-
     end
+
     return nothing
 end
 
@@ -311,8 +228,8 @@ function defaultdist(sz::Int, nc::Int)
     end
 end
 
-function find_bonds(pc::PointCloud, δ::Float64, owned_points::Vector{UnitRange{Int}},
-                    n_threads::Int)
+@timeit TO function find_bonds(pc::PointCloud, δ::Float64,
+                               owned_points::Vector{UnitRange{Int}}, n_threads::Int)
     _bonds = Vector{Vector{Int}}(undef, n_threads)
     _init_dists = Vector{Vector{Float64}}(undef, n_threads)
     n_family_members = zeros(Int, pc.n_points)
@@ -345,7 +262,7 @@ end
 
 get_cells(n::Int) = [MeshCell(VTKCellTypes.VTK_VERTEX, (i,)) for i in 1:n]
 
-function calc_stable_timestep(sp::SimulationParameters, tls::Vector{ThreadLocalStorage})
+@timeit TO function calc_stable_timestep(sp::SimulationParameters, tls::Vector{ThreadLocalStorage})
     _Δt = zeros(Float64, sp.n_threads)
     @threads :static for tid in 1:sp.n_threads
         timesteps = fill(typemax(Float64), sp.pc.n_points)
@@ -364,14 +281,12 @@ function calc_stable_timestep(sp::SimulationParameters, tls::Vector{ThreadLocalS
     return Δt
 end
 
-function export_vtk(sp::SimulationParameters, gs::GlobalStorage, timestep::Int,
+@timeit TO function export_vtk(sp::SimulationParameters, gs::GlobalStorage, timestep::Int,
                                time::Float64)
     filename = joinpath(sp.export_path, @sprintf("timestep_%04d", timestep))
     vtk_grid(filename, sp.pc.position, sp.cells) do vtk
         vtk["Damage", VTKPointData()] = gs.damage
-        # vtk["ForceDensity", VTKPointData()] = @views body.b_int[:, :, 1]
         vtk["Displacement", VTKPointData()] = gs.displacement
-        # vtk["Velocity", VTKPointData()] = body.velocity
         vtk["Time", VTKFieldData()] = time
     end
     return nothing
@@ -387,8 +302,8 @@ function find_hood_range(n_family_members::Vector{Int}, n_points::Int)
     return hood_range
 end
 
-function define_precracks!(gs::GlobalStorage, vtls::Vector{ThreadLocalStorage},
-                           sp::SimulationParameters, precracks::Vector{PreCrack})
+@timeit TO function define_precracks!(gs::GlobalStorage, vtls::Vector{ThreadLocalStorage},
+                                      sp::SimulationParameters, precracks::Vector{PreCrack})
     for precrack in precracks
         @threads :static for tls in vtls
             tls.n_active_family_members .= 0
@@ -418,10 +333,106 @@ function define_precracks!(gs::GlobalStorage, vtls::Vector{ThreadLocalStorage},
     end
 
     # initial calc_damage call
+    calc_damage!(gs, sp)
+
+    return nothing
+end
+
+@timeit TO function compute_forcedensity!(vtls::Vector{ThreadLocalStorage},
+                                          gs::GlobalStorage, sp::SimulationParameters)
+    @threads :static for tls in vtls
+        tls.b_int .= 0
+        tls.n_active_family_members .= 0
+        for i in tls.tl_points
+            for cbond in sp.hood_range[i]
+                j = sp.bonds[cbond]
+                L = sp.init_dists[cbond]
+                li = tls.pointmap[i]
+                ϑx = gs.position[1, j] - gs.position[1, i]
+                ϑy = gs.position[2, j] - gs.position[2, i]
+                ϑz = gs.position[3, j] - gs.position[3, i]
+                l = sqrt(ϑx * ϑx + ϑy * ϑy + ϑz * ϑz)
+                ε = (l - L) / L
+                temp = gs.bond_failure[cbond] * sp.mat.bc * ε / l * sp.pc.volume[j]
+                tls.b_int[1, li] += temp * ϑx
+                tls.b_int[2, li] += temp * ϑy
+                tls.b_int[3, li] += temp * ϑz
+
+                # failure mechanism
+                if ε > sp.mat.εc
+                    gs.bond_failure[cbond] = 0
+                end
+                tls.n_active_family_members[li] += gs.bond_failure[cbond]
+            end
+        end
+    end
+    return nothing
+end
+
+@timeit TO function apply_bcs!(gs::GlobalStorage, sp::SimulationParameters, time::Float64)
+    @sync for bc in sp.bcs
+        Threads.@spawn begin
+            value = bc.fun(time)
+            dim = bc.dim
+            @inbounds @simd for i in bc.point_id_set
+                gs.velocity_half[dim, i] = value
+            end
+        end
+    end
+    return nothing
+end
+
+@timeit TO function reduce_tls_to_gs!(gs::GlobalStorage, vtls::Vector{ThreadLocalStorage})
+    # reduction
+    gs.b_int .= 0
+    gs.n_active_family_members .= 0
+    for tls in vtls
+        for (gi, li) in tls.pointmap
+            for d in 1:3
+                gs.b_int[d, gi] = tls.b_int[d, li]
+            end
+            gs.n_active_family_members[gi] = tls.n_active_family_members[li]
+        end
+    end
+    return nothing
+end
+
+@timeit TO function update_disp_and_position!(gs::GlobalStorage, sp::SimulationParameters,
+                                              Δt::Float64)
+    @threads :static for i in 1:sp.pc.n_points
+        for d in 1:3
+            gs.displacement[d, i] += gs.velocity_half[d, i] * Δt
+            gs.position[d, i] += gs.velocity_half[d, i] * Δt
+        end
+    end
+    return nothing
+end
+
+@timeit TO function update_velocity_half!(gs::GlobalStorage, sp::SimulationParameters,
+                                          Δt½::Float64)
+    @threads :static for i in 1:sp.pc.n_points
+        for d in 1:3
+            gs.velocity_half[d, i] = gs.velocity[d, i] + gs.acceleration[d, i] * Δt½
+        end
+    end
+    return nothing
+end
+
+@timeit TO function compute_equation_of_motion!(gs::GlobalStorage, sp::SimulationParameters,
+                                                Δt½::Float64)
+    @threads :static for i in 1:sp.pc.n_points
+        for d in 1:3
+            gs.acceleration[d, i] = (gs.b_int[d, i]) / sp.mat.rho
+            gs.velocity[d, i] = gs.velocity_half[d, i] + gs.acceleration[d, i] * Δt½
+        end
+    end
+    return nothing
+end
+
+@timeit TO function calc_damage!(gs::GlobalStorage, sp::SimulationParameters)
     @threads :static for i in 1:sp.pc.n_points
         gs.damage[i] = 1 - gs.n_active_family_members[i] / sp.n_family_members[i]
     end
-
     return nothing
 end
 
