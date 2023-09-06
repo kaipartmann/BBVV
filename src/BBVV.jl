@@ -82,13 +82,18 @@ function simulation(pc::PointCloud, mat::BondBasedMaterial, bcs::Vector{Velocity
     println("----------------------------")
     println("  PERIDYNAMICS SIMULATION")
     println("----------------------------")
-    print("initialization...")
-    sp, gs, vtls = init_simulation(pc, mat, bcs, precracks, n_timesteps, export_freq,
-                                   export_path)
-    println("\r✔ initialization   ")
-    print("time loop...")
-    time_loop!(gs, vtls, sp)
-    println("\r✔ time loop   ")
+    walltime = @elapsed begin
+        print("initialization...")
+        sp, gs, vtls = init_simulation(pc, mat, bcs, precracks, n_timesteps, export_freq,
+                                       export_path)
+        println("\r✔ initialization   ")
+        print("time loop...")
+        time_loop!(gs, vtls, sp)
+        println("\r✔ time loop   ")
+    end
+    open(joinpath(export_path,"logfile.log"), "w+") do io
+        write(io, "simulation completed after $walltime seconds (wall time)")
+    end
     println("--- SIMULATION COMPLETED ---")
 end
 
