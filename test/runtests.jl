@@ -1,6 +1,3 @@
-using BBVV
-using Test
+using TestItemRunner
 
-@testset "BBVV.jl" begin
-    # Write your tests here.
-end
+@run_package_tests
