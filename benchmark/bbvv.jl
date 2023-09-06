@@ -41,4 +41,4 @@ println("\n** compilationrun $simname")
 Δx = 1/150
 nt = 2000
 println("\n** benchmarkrun $simname")
-@descend bbvv_benchmark(simname, l, Δx, v0, nt)
+@time bbvv_benchmark(simname, l, Δx, v0, nt)
