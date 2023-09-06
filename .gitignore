@@ -3,4 +3,6 @@
 *.jl.mem
 /docs/Manifest.toml
 /docs/build/
-/*results*/
+*/results*/
+*.vtu
+*.DS_Store
