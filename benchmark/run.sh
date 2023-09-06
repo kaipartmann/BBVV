@@ -4,6 +4,7 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --partition=medium
 #SBATCH --mem=0
+#SBATCH --reservation=hackathon
 
 ml lang JuliaHPC
 
