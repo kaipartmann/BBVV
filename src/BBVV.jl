@@ -156,23 +156,7 @@ function init_simulation(pc::PointCloud, mat::BondBasedMaterial, bcs::Vector{Vel
     gs = GlobalStorage(position, displacement, velocity, velocity_half, acceleration,
                        bond_failure, damage, b_int,n_active_family_members)
 
-    # define initial cracks
-    for precrack in precracks
-        define_precrack!(gs, vtls, sp, precrack)
-    end
-
-    # reduction necessary
-    gs.n_active_family_members .= 0
-    for tls in vtls
-        for (gi, li) in tls.pointmap
-            gs.n_active_family_members[gi] = tls.n_active_family_members[li]
-        end
-    end
-
-    # initial calc_damage call
-    @threads :static for i in 1:sp.pc.n_points
-        gs.damage[i] = 1 - gs.n_active_family_members[i] / sp.n_family_members[i]
-    end
+    define_precracks!(gs, vtls, sp, precracks)
 
     return sp, gs, vtls
 end
@@ -398,25 +382,41 @@ function find_hood_range(n_family_members::Vector{Int}, n_points::Int)
     return hood_range
 end
 
-function define_precrack!(gs::GlobalStorage, vtls::Vector{ThreadLocalStorage},
-                          sp::SimulationParameters, precrack::PreCrack)
-    @threads :static for tls in vtls
-        tls.n_active_family_members .= 0
-        for i in tls.tl_points
-            for cbond in sp.hood_range[i]
-                j = sp.bonds[cbond]
-                i_is_in_set_a = in(i, precrack.point_id_set_a)
-                i_is_in_set_b = in(i, precrack.point_id_set_b)
-                j_is_in_set_a = in(j, precrack.point_id_set_a)
-                j_is_in_set_b = in(j, precrack.point_id_set_b)
-                if i_is_in_set_a && j_is_in_set_b || i_is_in_set_b && j_is_in_set_a
-                    gs.bond_failure[cbond] = 0
+function define_precracks!(gs::GlobalStorage, vtls::Vector{ThreadLocalStorage},
+                           sp::SimulationParameters, precracks::Vector{PreCrack})
+    for precrack in precracks
+        @threads :static for tls in vtls
+            tls.n_active_family_members .= 0
+            for i in tls.tl_points
+                for cbond in sp.hood_range[i]
+                    j = sp.bonds[cbond]
+                    i_is_in_set_a = in(i, precrack.point_id_set_a)
+                    i_is_in_set_b = in(i, precrack.point_id_set_b)
+                    j_is_in_set_a = in(j, precrack.point_id_set_a)
+                    j_is_in_set_b = in(j, precrack.point_id_set_b)
+                    if i_is_in_set_a && j_is_in_set_b || i_is_in_set_b && j_is_in_set_a
+                        gs.bond_failure[cbond] = 0
+                    end
+                    li = tls.pointmap[i]
+                    tls.n_active_family_members[li] += gs.bond_failure[cbond]
                 end
-                li = tls.pointmap[i]
-                tls.n_active_family_members[li] += gs.bond_failure[cbond]
             end
         end
     end
+
+    # reduction necessary
+    gs.n_active_family_members .= 0
+    for tls in vtls
+        for (gi, li) in tls.pointmap
+            gs.n_active_family_members[gi] = tls.n_active_family_members[li]
+        end
+    end
+
+    # initial calc_damage call
+    @threads :static for i in 1:sp.pc.n_points
+        gs.damage[i] = 1 - gs.n_active_family_members[i] / sp.n_family_members[i]
+    end
+
     return nothing
 end
 
