@@ -7,7 +7,7 @@
 
 ml lang JuliaHPC
 
-respath="results"
+respath="results_150"
 rm -rf $respath
 threads=(1 2 4 8 16 32 64)
 for t in ${threads[@]}; do
