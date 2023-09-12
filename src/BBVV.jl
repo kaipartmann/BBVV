@@ -9,7 +9,7 @@ using ThreadPinning
 
 export PointCloud, BondBasedMaterial, VelocityBC, PreCrack, simulation
 
-pinthreads(:cores; force=false)
+pinthreads(:numa; force=false)
 
 const TO = TimerOutput()
 
