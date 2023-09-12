@@ -1,10 +1,14 @@
 #!/bin/bash
-#SBATCH --time=24:00:00
+#SBATCH --time=4:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
-#SBATCH --partition=medium
 #SBATCH --mem=0
-#SBATCH --reservation=hackathon
+#SBATCH --partition=normal
+#SBATCH --mail-type=FAIL,BEGIN,END
+#SBATCH --mail-user=kai.partmann@uni-siegen.de
+# # SBATCH --reservation=hackathon
+# # SBATCH --account=hpc-lco-usrtr
+#SBATCH --exclusive # good for benchmarking!
 
 ml lang JuliaHPC
 
