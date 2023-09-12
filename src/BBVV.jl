@@ -120,7 +120,7 @@ end
 
     # create Vector{ThreadLocalStorage}
     vtls = Vector{ThreadLocalStorage}(undef, n_threads)
-    @threads for tid in 1:n_threads
+    @threads :static for tid in 1:n_threads
         tl_points = balanced_point_dist[tid]
         pointmap = Dict{Int,Int}()
         n_local_points = 0
