@@ -115,10 +115,13 @@ end
                               n_family_members, hood_range, bcs, n_timesteps, export_freq,
                               export_path)
 
+    # load balancing ->
+    balanced_point_dist = balancedist(point_dist, n_family_members)
+
     # create Vector{ThreadLocalStorage}
     vtls = Vector{ThreadLocalStorage}(undef, n_threads)
     @threads for tid in 1:n_threads
-        tl_points = point_dist[tid]
+        tl_points = balanced_point_dist[tid]
         pointmap = Dict{Int,Int}()
         n_local_points = 0
         for i in tl_points
@@ -434,6 +437,33 @@ end
         gs.damage[i] = 1 - gs.n_active_family_members[i] / sp.n_family_members[i]
     end
     return nothing
+end
+
+function balancedist(point_ddist::Vector{UnitRange{Int}}, n_family_members::Vector{Int})
+    n_threads = length(point_ddist)
+    n_points = length(n_family_members)
+    n_bonds = sum(n_family_members)
+    n_bonds_per_thread_target = n_bonds ÷ n_threads
+    balancedist = fill(0:0, n_threads)
+    start_point = 1
+    for tid in 1:n_threads
+        end_point = last(point_ddist[tid])
+        n_bonds_per_tid = sum(n_family_members[start_point:end_point])
+        if n_bonds_per_tid < n_bonds_per_thread_target && end_point < n_points
+            while n_bonds_per_tid < n_bonds_per_thread_target
+                end_point += 1
+                n_bonds_per_tid += n_family_members[end_point]
+            end
+        elseif n_bonds_per_tid > n_bonds_per_thread_target && end_point < n_points
+            while n_bonds_per_tid > n_bonds_per_thread_target
+                end_point -= 1
+                n_bonds_per_tid -= n_family_members[end_point]
+            end
+        end
+        balancedist[tid] = start_point:end_point
+        start_point = end_point + 1
+    end
+    return balancedist
 end
 
 end
