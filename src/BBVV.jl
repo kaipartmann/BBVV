@@ -389,7 +389,7 @@ end
     # reduction
     gs.b_int .= 0
     gs.n_active_family_members .= 0
-    for tls in vtls
+    @threads :static for tls in vtls
         for (gi, li) in tls.pointmap
             for d in 1:3
                 gs.b_int[d, gi] = tls.b_int[d, li]
